@@ -51,7 +51,7 @@ COMMUTE_MESSAGE = os.getenv("COMMUTE_MESSAGE", "🚗 Don't forget to book the co
 
 # Morning menu preview to the main group (fixed format, straight from the sheet).
 # Morning hello + today's menu (mon-fri). Set MORNING_TIMES=off to disable.
-MORNING_TIMES = os.getenv("MORNING_TIMES", "09:30")
+MORNING_TIMES = os.getenv("MORNING_TIMES") or os.getenv("MENU_PREVIEW_TIMES") or "09:30"  # old name still accepted
 # Friday "don't rush home" nudge and Monday morning juice reminder (main group).
 FRIDAY_WINDDOWN_TIMES = os.getenv("FRIDAY_WINDDOWN_TIMES", "16:30")
 # Juice reminder: weekdays, only when the sheet has a juice for today.
@@ -70,10 +70,10 @@ SKIP_WEEKENDS = os.getenv("SKIP_WEEKENDS", "true").lower() == "true"
 ALLOW_STATIC_FALLBACK = os.getenv("ALLOW_STATIC_FALLBACK", "false").lower() == "true"
 
 # GIFs attached to break messages. Override with comma-separated URLs in LUNCH_GIF_URLS / TEA_GIF_URLS,
-# or set GIPHY_API_KEY to pull a fresh random GIF from Giphy each time.
+# Only curated links are used; unrestricted random GIF search is intentionally retired.
+GIF_CHANCE = max(0.0, min(1.0, float(os.getenv("GIF_CHANCE", "0.2"))))
+BREAK_JITTER_SECONDS = max(0, min(300, int(os.getenv("BREAK_JITTER_SECONDS", "180"))))
 SEND_GIF = os.getenv("SEND_GIF", "false").lower() == "true"
-GIPHY_API_KEY = os.getenv("GIPHY_API_KEY", "")
-GIF_SEARCH = {"lunch": os.getenv("LUNCH_GIF_QUERY", "hungry"), "tea": os.getenv("TEA_GIF_QUERY", "tea time")}
 DEFAULT_GIFS = {
     "lunch": ["https://lh5.googleusercontent.com/proxy/kCYn1T8dfpT-DahTs9cFIr5lUzu6iifCpAbzUGNzXJPmFMNpB0PLSYMtbxANU6W94fMqM2p59hDVWG1lbMce3rI23qP0HHHtUilHH3t6Om0"],
     "tea": ["https://lh5.googleusercontent.com/proxy/l6RaNrQUsZEBdiHkoVvvs-N7kpGawtmajVpKOey-1x4YEhmeqepxJLxy4soxH0YxZ7Li04TEVaHAuhI6SZ7cWN5JBE8oyr-xE2fUJw"],
@@ -120,6 +120,7 @@ def _menu_rows():
     if _menu_cache["rows"] is not None and time.time() - _menu_cache["at"] < MENU_CACHE_SECONDS:
         return _menu_cache["rows"]
     last_error = None
+    rejected = []
     for attempt in range(3):
         try:
             r = requests.get(_menu_csv_url(MENU_SHEET_URL), timeout=(10, 30))
@@ -197,18 +198,15 @@ def clean(text: str) -> str:
 
 
 def pick_gif(kind: str):
-    """Return a GIF URL for this break, or None if GIFs are disabled."""
-    if not SEND_GIF:
+    """Occasional curated GIFs, with no consecutive or recently repeated GIFs."""
+    if not SEND_GIF or random.random() >= GIF_CHANCE:
         return None
-    if GIPHY_API_KEY:
-        try:
-            r = requests.get("https://api.giphy.com/v1/gifs/random", timeout=10, params={
-                "api_key": GIPHY_API_KEY, "tag": GIF_SEARCH[kind], "rating": "g"})
-            r.raise_for_status()
-            return r.json()["data"]["images"]["downsized"]["url"]
-        except Exception:
-            log.exception("Giphy lookup failed; using built-in GIFs")
-    return random.choice(GIFS[kind])
+    recent = [m for m in persona._load()["recent"] if m.get("kind") in ("lunch", "tea")]
+    if recent and recent[-1].get("gif_url"):
+        return None
+    used = {m.get("gif_url") for m in recent[-6:]}
+    choices = [url for url in GIFS[kind] if url not in used]
+    return random.choice(choices) if choices else None
 
 
 def post_to_google_chat(text: str, gif_url=None) -> str:
@@ -250,89 +248,65 @@ def post_announcement(message: str, title: str = "Announcement", important: bool
     return f"Announcement posted (HTTP {resp.status_code})"
 
 
-def generate_with_agent(kind: str) -> None:
-    """Let a LangChain tool-calling agent compose and send the message."""
-    from langchain.agents import AgentExecutor, create_tool_calling_agent
+def draft_break(kind, now, item=None, weather=None):
+    """Compose only. This function cannot post, so previews use the live drafting path."""
     from langchain_core.prompts import ChatPromptTemplate
-    from langchain_core.tools import tool
-    from langchain_openai import ChatOpenAI
-
-    item = get_today_menu(kind)
-    log.info("Today's %s menu: %s", kind, item or "(not set)")
-
-    sent = []
-
-    @tool
-    def send_google_chat_message(message: str) -> str:
-        """Send the final message to the team's Google Chat space."""
-        if sent:  # never post twice for one reminder
-            return "Already sent. Do not send again; you are done."
-        sent.append(True)
-        message = strip_offmenu_emojis(message, allowed_emojis(kind, item))
-        result = post_to_google_chat(with_menu(message, kind, item), pick_gif(kind))
-        log.info("%s message: %s", kind.capitalize(), result)
-        persona.remember(kind, message)
-        return result
-
+    style = persona.choose_style()
+    seed = persona.break_seed(kind)
+    if random.random() < 0.25:
+        seed = "Mahanla, " + seed[0].lower() + seed[1:]
+    brief = persona.persona_brief(kind, now, item, weather, style=style)
     prompt = ChatPromptTemplate.from_messages([
-        ("system",
-         "{persona}\n\n"
-         "Task: write ONE {kind}-time reminder for the '{team}' Google Chat group: ONE very short sentence, "
-         "max 10 words, in character. Shorter is better. "
-         "Vibe: {vibe}. Today is {today}.\n"
-         "ANGLE (mandatory, commit to it fully; it's the whole joke): {angle}.\n"
-         "Style rules:\n"
-         "- FOOD RULE: never name any food or drink that is not on today's menu. If no menu is given below, "
-         "don't name any specific food at all; just say lunch or tea.\n"
-         "- Use exactly one emoji at the start: {emoji_hint}. No other emojis.\n"
-         "- You don't need to address the team by name. If you do, use '{team}' exactly; no nicknames.\n"
-         "- No hype words (epic, champions, brilliance, crush it, let's go, devour) and no exclamation spam.\n"
-         "- Don't sign the message or mention your own name.\n"
-         "- Never use em dashes (—) or en dashes (–); use commas or full stops instead.\n"
-         "- Don't open with 'Attention' or 'It's lunchtime'; vary your openings. No filler like 'delightful' or 'bound to'.\n"
-         "- Pick a different dish to mention than your recent messages did, or none at all.\n"
-         "Examples of the right tone:\n"
-         "- 🍽️ Lunch is live. Bugs can wait an hour.\n"
-         "- ☕ Tea time. That PR can wait.\n"
-         "{menu_note}"
-         "Write something new in that spirit; don't copy the examples. "
-         "Call send_google_chat_message exactly once with the final message."),
-        ("human", "It's {kind} time now ({now}). Compose and send the message."),
-        ("placeholder", "{agent_scratchpad}"),
-    ])
-    llm = make_llm(temperature=1.0)
-    tools = [send_google_chat_message]
-    executor = AgentExecutor(agent=create_tool_calling_agent(llm, tools, prompt), tools=tools,
-                             max_iterations=3)
-    now = datetime.now(ZoneInfo(TIMEZONE))
-    menu_note = (
-        f"Today's {kind} menu: {item}. The exact menu is automatically added on its own line below your "
-        "message, so do NOT list the menu or rename/paraphrase dishes. You may mention ONE dish by its exact "
-        "name from the menu to tease it.\n" if item else "No menu today: don't name any food.\n")
-    executor.invoke({
-        "menu_note": menu_note,
-        "persona": persona.persona_brief(kind, now, item, weather_now()),
-        "emoji_hint": " or ".join(allowed_emojis(kind, item)),
-        "team": TEAM_NAME, "kind": kind, "vibe": VIBE, "angle": random.choice(persona.ANGLES),
-        "today": now.strftime("%A, %d %B"), "now": now.strftime("%I:%M %p"),
-    })
+        ("system", "{brief}\nWrite one {kind} reminder, 5 to 28 words, at most two sentences. "
+         "Zero or one emoji, placed naturally. No signature, no em/en dashes. "
+         "Only name food present in this menu: {menu}. If absent, name no specific food. "
+         "The exact menu is appended separately, so don't list or paraphrase it. "
+         "Don't claim food is running out or ready early. Don't invent team events or reactions. "
+         "Avoid these canned phrases entirely: hey team, enjoy your meal, refuel, recharge, "
+         "perfect chance, perfect moment, cozy, lovely, well-deserved, treat yourselves. "
+         "No exclamation marks. No generic announcement voice. Never start by addressing the team. "
+         "Sound conversational and understated, like these ORIGINAL examples (do not copy): "
+         "Mahanla, lunch. The tabs can stay open. / Fish buns for tea. Solid afternoon. / "
+         "A proper break sounds good about now. / Lunch deserves a little attention today. "
+         "Use this starting point verbatim or make a small natural improvement: {seed}. "
+         "Do not add mahanla or aney unless the starting point includes it. "
+         "Reply with message text only. {retry}"),
+        ("human", "It is {kind} time on {today}. Write the reminder.")])
+    chain = prompt | make_llm(temperature=0.95)
+    rejected = []
+    for attempt in range(3):
+        text = chain.invoke({"brief": brief, "seed": seed, "kind": kind, "menu": item or "not available",
+            "today": now.strftime("%A, %d %B"),
+            "retry": "Rejected drafts (do not reuse their openings or ideas): " + repr(rejected) + ". Use a different sentence structure and a concrete observation about the actual menu." if attempt else ""}).content.strip().strip('"')
+        text = clean(strip_offmenu_emojis(text, allowed_emojis(kind, item)))
+        text = re.sub(r"\b(?:machan|mahan|mahanla)\b", "Mahanla", text, flags=re.IGNORECASE)
+        if ("mahanla" not in text.lower() and "aney" not in text.lower() or "Mahanla" in seed) and text and not persona.repeated(text) and not any(phrase in text.lower() for phrase in ("hey team", "recharge", "refuel", "perfect chance", "perfect moment", "cozy", "lovely", "enjoy your meal")):
+            return text, style[0]
+        rejected.append(text)
+    return seed, style[0]  # A varied, grounded starting point if model rewrites fail quality checks.
+
+
+def generate_with_agent(kind: str) -> None:
+    """Draft first, then perform exactly one explicit send."""
+    item = get_today_menu(kind)
+    message, style = draft_break(kind, datetime.now(ZoneInfo(TIMEZONE)), item, weather_now())
+    gif = pick_gif(kind)
+    result = post_to_google_chat(with_menu(message, kind, item), gif)
+    persona.remember(kind, message, style=style, gif_url=gif)
+    log.info("%s message: %s", kind, result)
 
 
 def run_break(kind: str) -> None:
     log.info("Triggering %s message", kind)
     if OPENAI_API_KEY:
-        try:
-            generate_with_agent(kind)
-            return
-        except Exception:
-            log.exception("AI generation failed")
-    else:
-        log.error("OPENAI_API_KEY not set; cannot generate %s message", kind)
+        generate_with_agent(kind)
+        return
     if not ALLOW_STATIC_FALLBACK:
         raise RuntimeError(f"Could not generate {kind} message (set OPENAI_API_KEY)")
-    log.warning("Sending static fallback message")
     text = random.choice(FALLBACKS[kind]).format(team=TEAM_NAME)
-    log.info(post_to_google_chat(with_menu(text, kind, get_today_menu(kind)), pick_gif(kind)))
+    gif = pick_gif(kind)
+    log.info(post_to_google_chat(with_menu(text, kind, get_today_menu(kind)), gif))
+    persona.remember(kind, text, style="fallback", gif_url=gif)
 
 
 def scheduled_break(kind: str) -> None:
@@ -572,7 +546,7 @@ def schedule(background: bool = False):
                 log.error("Skipping %s schedule: %s", kind, e)
                 continue
             sched.add_job(scheduled_break, CronTrigger(day_of_week=SCHEDULE_DAYS, hour=hour,
-                                                 minute=minute, timezone=TIMEZONE),
+                                                 minute=minute, timezone=TIMEZONE, jitter=BREAK_JITTER_SECONDS),
                           args=[kind], id=f"{kind}-{t}", misfire_grace_time=300)
             log.info("Scheduled %s at %02d:%02d (%s, %s)", kind, hour, minute, SCHEDULE_DAYS, TIMEZONE)
     for func, times, days, args, label in (

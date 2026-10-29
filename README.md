@@ -59,7 +59,7 @@ Google Sheet with the columns **`date | day | lunch | tea`** (dates as `YYYY-MM-
 |---|---|---|
 | `LUNCH_TIMES` | `12:30` | Comma-separated; `12:30`, `12.30` and `12:30 PM` all work |
 | `TEA_TIMES` | `15:30` | |
-| `MENU_PREVIEW_TIMES` | `09:30` | Leave empty to turn the preview off |
+| `MORNING_TIMES` | `09:30` | Morning hello + today's menu; `off` disables it (old name `MENU_PREVIEW_TIMES` also works) |
 | `TIMEZONE` | `Asia/Colombo` | |
 | `SCHEDULE_DAYS` | `mon-fri` | Days for the lunch and tea messages |
 | `SKIP_WEEKENDS` | `true` | Blocks every scheduled message on Saturday and Sunday |
@@ -73,10 +73,8 @@ Google Sheet with the columns **`date | day | lunch | tea`** (dates as `YYYY-MM-
 | Variable | Default | Description |
 |---|---|---|
 | `MENU_SHEET_URL` | — | Google Sheet share link (or a CSV link) |
-| `SEND_GIF` | `true` | Attach a GIF to lunch and tea messages |
+| `SEND_GIF` | `false` | Enable occasional curated GIFs on lunch and tea reminders |
 | `LUNCH_GIF_URLS` / `TEA_GIF_URLS` | built-in | Your own GIF links, comma-separated |
-| `GIPHY_API_KEY` | — | Optional. Uses a random Giphy GIF each time instead of the fixed ones |
-| `LUNCH_GIF_QUERY` / `TEA_GIF_QUERY` | `hungry` / `tea time` | Giphy search words (only used with the key) |
 | `COMMUTE_WEBHOOK_URL` | — | Commute group webhook; leave empty to turn the commute reminder off |
 | `COMMUTE_TIMES` | `13:30` | |
 | `COMMUTE_MESSAGE` | `🚗 Don't forget to book the commute!` | |
@@ -105,3 +103,16 @@ agent.py          # scheduler, AI message generation, menu sheet, weather, Googl
 requirements.txt
 .env.example      # all settings with defaults
 ```
+
+
+## More natural AMEXA reminders
+
+Lunch and tea drafts vary between plain nudges, dry observations, food opinions, invitations, callbacks and occasional developer jokes. Slang is optional, recent openings/jokes are checked against a varied bank of grounded starting points, and the last 60 posted messages are retained. AMEXA never claims real experiences or invents team reactions. Menus remain verbatim from the sheet.
+
+`BREAK_JITTER_SECONDS=180` delays each scheduled lunch/tea reminder by zero to three minutes. It never sends before the nominal time. Commute, morning, juice and Friday schedule times are unchanged. There are no extra messages or follow-ups for silence. Set the delay to `0` for fixed times.
+
+`SEND_GIF=true` enables curated GIF selection with `GIF_CHANCE=0.2` per eligible reminder. GIFs never occur on consecutive lunch/tea reminders and URLs used in the last six break reminders are excluded. Consequently the actual GIF frequency is lower than 20%, especially with a small collection. Existing `LUNCH_GIF_URLS` and `TEA_GIF_URLS` are used. Random Giphy search settings are no longer used.
+
+Generate a review without posting: `.venv/bin/python preview_personality.py`. This uses the configured AI provider (normal API charges apply), the public meal sheet, and isolated temporary memory. It produces `previews/two_week.html` and `previews/two_week.json` for the next ten weekdays. It proposes GIFs enabled without changing `.env`; it never calls the Google Chat send endpoint. Run tests with `.venv/bin/python -m unittest discover -s tests -v`.
+
+The changes are local until the agent is restarted or redeployed. Existing `.env` values are preserved. If GIFs are disabled there, they stay disabled until explicitly enabled. Posting failures are not retried with fallback messages because delivery might already have succeeded. No scheduler catch-up outside the existing five-minute misfire grace window is added.
