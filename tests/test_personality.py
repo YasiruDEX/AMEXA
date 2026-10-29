@@ -16,13 +16,13 @@ class PersonalityTests(unittest.TestCase):
     def test_old_memory_remains_readable(self):
         Path(persona.MEMORY_FILE).write_text('{"recent":[{"text":"hello","kind":"tea"}],"counts":{}}')
         self.assertEqual(persona.recent_messages(), ['hello'])
-        persona.remember('lunch', 'Lunch time, mahanla.', style='plain')
+        persona.remember('lunch', 'Lunch time, machanla.', style='plain')
         self.assertEqual(len(persona.recent_messages()), 2)
 
     def test_close_wording_rejected(self):
         persona.remember('lunch', 'Lunch deserves your full attention today.')
         self.assertTrue(persona.repeated('Lunch deserves your full attention today!'))
-        self.assertFalse(persona.repeated('Mahanla, take a proper break.'))
+        self.assertFalse(persona.repeated('Machanla, take a proper break.'))
 
     def test_styles_dont_repeat_or_overuse_dev_jokes(self):
         persona.remember('lunch', 'Hello', style='dev')

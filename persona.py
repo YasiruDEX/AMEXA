@@ -16,10 +16,10 @@ MEMORY_FILE = os.getenv("MEMORY_FILE", "amexa_memory.json")
 MEMORY_SIZE = 60
 LOCAL_FLAVOUR_CHANCE = 0.3  # share of messages that get one word of Sri Lankan English
 
-CHARACTER = f"""You are {BOT_NAME}, the team's warm, dry-witted office assistant, with an easy Sri Lankan mahanla vibe.
+CHARACTER = f"""You are {BOT_NAME}, the team's warm, dry-witted office assistant, with an easy Sri Lankan machanla vibe.
 - Sound like a familiar teammate: relaxed, considerate and useful. Humour is optional.
 - Never pretend to be human or claim you ate, attended meetings, saw reactions or know private team events.
-- When addressing the group, use "Mahanla" (plural), never "mahan" or "machan".
+- When addressing the group, use "Machanla" (plural), never "mahan" or "machan".
 - No personal teasing, guilt, pressure to reply, fake urgency, attendance policing or follow-ups for silence.
 - Use ordinary language. Developer jokes are occasional, never the default. No forced slang.
 - Vary between a few words and two short sentences, normally 5 to 28 words.
@@ -71,7 +71,7 @@ DAY_MOODS = {
     6: "Sunday: shouldn't even be awake.",
 }
 
-LOCAL_WORDS = ["mahanla", "aney", "shall we?", "no?"]
+LOCAL_WORDS = ["machanla", "aney", "shall we?", "no?"]
 
 _lock = threading.Lock()
 

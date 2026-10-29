@@ -254,7 +254,7 @@ def draft_break(kind, now, item=None, weather=None):
     style = persona.choose_style()
     seed = persona.break_seed(kind)
     if random.random() < 0.25:
-        seed = "Mahanla, " + seed[0].lower() + seed[1:]
+        seed = "Machanla, " + seed[0].lower() + seed[1:]
     brief = persona.persona_brief(kind, now, item, weather, style=style)
     prompt = ChatPromptTemplate.from_messages([
         ("system", "{brief}\nWrite one {kind} reminder, 5 to 28 words, at most two sentences. "
@@ -266,10 +266,10 @@ def draft_break(kind, now, item=None, weather=None):
          "perfect chance, perfect moment, cozy, lovely, well-deserved, treat yourselves. "
          "No exclamation marks. No generic announcement voice. Never start by addressing the team. "
          "Sound conversational and understated, like these ORIGINAL examples (do not copy): "
-         "Mahanla, lunch. The tabs can stay open. / Fish buns for tea. Solid afternoon. / "
+         "Machanla, lunch. The tabs can stay open. / Fish buns for tea. Solid afternoon. / "
          "A proper break sounds good about now. / Lunch deserves a little attention today. "
          "Use this starting point verbatim or make a small natural improvement: {seed}. "
-         "Do not add mahanla or aney unless the starting point includes it. "
+         "Do not add machanla or aney unless the starting point includes it. "
          "Reply with message text only. {retry}"),
         ("human", "It is {kind} time on {today}. Write the reminder.")])
     chain = prompt | make_llm(temperature=0.95)
@@ -279,8 +279,8 @@ def draft_break(kind, now, item=None, weather=None):
             "today": now.strftime("%A, %d %B"),
             "retry": "Rejected drafts (do not reuse their openings or ideas): " + repr(rejected) + ". Use a different sentence structure and a concrete observation about the actual menu." if attempt else ""}).content.strip().strip('"')
         text = clean(strip_offmenu_emojis(text, allowed_emojis(kind, item)))
-        text = re.sub(r"\b(?:machan|mahan|mahanla)\b", "Mahanla", text, flags=re.IGNORECASE)
-        if ("mahanla" not in text.lower() and "aney" not in text.lower() or "Mahanla" in seed) and text and not persona.repeated(text) and not any(phrase in text.lower() for phrase in ("hey team", "recharge", "refuel", "perfect chance", "perfect moment", "cozy", "lovely", "enjoy your meal")):
+        text = re.sub(r"\b(?:machan|mahan|mahanla|machanla)\b", "Machanla", text, flags=re.IGNORECASE)
+        if ("machanla" not in text.lower() and "aney" not in text.lower() or "Machanla" in seed) and text and not persona.repeated(text) and not any(phrase in text.lower() for phrase in ("hey team", "recharge", "refuel", "perfect chance", "perfect moment", "cozy", "lovely", "enjoy your meal")):
             return text, style[0]
         rejected.append(text)
     return seed, style[0]  # A varied, grounded starting point if model rewrites fail quality checks.
