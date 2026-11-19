@@ -5,7 +5,10 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 import uvicorn
-from fastapi import FastAPI
+import html
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 import agent
@@ -145,6 +148,20 @@ def chat(req: ChatRequest) -> ChatResponse:
         log.exception("chat failed")
         reply = f"Sorry, something went wrong: {e}"
     return ChatResponse(response=reply)
+
+
+@app.get("/ask", response_class=HTMLResponse)
+def ask(q: str) -> HTMLResponse:
+    """Morning-button target: answers 'what's for breakfast/lunch/tea, any juice?' from the sheet."""
+    if q not in agent.ANSWER_LABELS:
+        raise HTTPException(status_code=400, detail="q must be breakfast, lunch, tea or juice")
+    answer = agent.ask(q).replace("*", "")
+    note = "Posted in the group too." if agent.ASK_POST_TO_GROUP else ""
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+        f"<title>{html.escape(persona.BOT_NAME)}</title>"
+        "<body style='font-family:system-ui;display:grid;place-items:center;min-height:90vh;margin:0 16px'>"
+        f"<div style='text-align:center'><h2>{html.escape(answer)}</h2><p style='color:#666'>{note}</p></div>")
 
 
 @app.get("/health")

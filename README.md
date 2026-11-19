@@ -6,7 +6,7 @@ A LangChain + OpenAI agent that keeps the **Agent Manager Team** fed, caffeinate
 
 | Time (Mon–Fri) | Message | Group |
 |---|---|---|
-| **09:30** | 🍽️ Today's lunch & tea menu, read from the menu sheet | Team group |
+| **09:30** | ☀️ Morning hello with 3 random question buttons (*What's for lunch?*, *Any juice today?*...). No menu in the message | Team group |
 | **12:30** | 🍛 AI-written lunch reminder, the day's menu and a GIF | Team group |
 | **13:30** | 🚗 "Don't forget to book the commute!" plus a rain forecast for the evening | Commute group |
 | **15:30** | ☕ AI-written tea reminder, the day's menu and a GIF | Team group |
@@ -40,6 +40,15 @@ The agent only posts when you clearly ask, and its reply tells you exactly what 
 
 > ⚠️ Anyone who can reach `/chat` can post to the team group, so keep the endpoint private.
 
+## Morning question buttons
+
+The morning message no longer lists the menu. It carries 3 random buttons picked from breakfast, lunch, tea and juice questions. Each button opens **`GET /ask?q=<breakfast|lunch|tea|juice>`** on this bot, which:
+
+- answers from the menu sheet (items copied verbatim) on a small page, and
+- posts the same answer to the team group (`ASK_POST_TO_GROUP`), at most once per question every `ASK_COOLDOWN_SECONDS` so repeated taps don't spam.
+
+Set `BOT_PUBLIC_URL` to where the bot is reachable (Google Chat webhooks can only attach link buttons, so the URL must be reachable from people's browsers). Without it, the questions appear as plain text.
+
 ## Daily menu sheet
 
 Google Sheet with the columns **`date | day | lunch | tea`** (dates as `YYYY-MM-DD`; `day` is optional and ignored). Fill in each day's row in the morning, or the whole week at once. Share the sheet as **"Anyone with the link can view"** and set `MENU_SHEET_URL` to its normal share link.
@@ -59,7 +68,10 @@ Google Sheet with the columns **`date | day | lunch | tea`** (dates as `YYYY-MM-
 |---|---|---|
 | `LUNCH_TIMES` | `12:30` | Comma-separated; `12:30`, `12.30` and `12:30 PM` all work |
 | `TEA_TIMES` | `15:30` | |
-| `MORNING_TIMES` | `09:30` | Morning hello + today's menu; `off` disables it (old name `MENU_PREVIEW_TIMES` also works) |
+| `BOT_PUBLIC_URL` | — | Public base URL of the bot, used by the morning buttons |
+| `ASK_POST_TO_GROUP` | `true` | Post button answers into the group too |
+| `ASK_COOLDOWN_SECONDS` | `600` | Min seconds between group posts for the same question |
+| `MORNING_TIMES` | `09:30` | Morning hello + question buttons; `off` disables it (old name `MENU_PREVIEW_TIMES` also works) |
 | `TIMEZONE` | `Asia/Colombo` | |
 | `SCHEDULE_DAYS` | `mon-fri` | Days for the lunch and tea messages |
 | `SKIP_WEEKENDS` | `true` | Blocks every scheduled message on Saturday and Sunday |

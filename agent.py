@@ -56,6 +56,12 @@ MORNING_TIMES = os.getenv("MORNING_TIMES") or os.getenv("MENU_PREVIEW_TIMES") or
 FRIDAY_WINDDOWN_TIMES = os.getenv("FRIDAY_WINDDOWN_TIMES", "16:30")
 # Juice reminder: weekdays, only when the sheet has a juice for today.
 JUICE_TIMES = os.getenv("JUICE_TIMES", "09:55")
+# Public base URL of this bot (e.g. https://amexa.example.com). When set, the morning message gets
+# question buttons that open {BOT_PUBLIC_URL}/ask?q=<kind>; the bot then answers from the sheet.
+BOT_PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "").rstrip("/")
+# Post the button's answer into the group too (each question at most once per ASK_COOLDOWN_SECONDS).
+ASK_POST_TO_GROUP = os.getenv("ASK_POST_TO_GROUP", "true").lower() == "true"
+ASK_COOLDOWN_SECONDS = int(os.getenv("ASK_COOLDOWN_SECONDS", "600"))
 
 # Weather check for the commute reminder (Open-Meteo, free, no key). Defaults to Colombo.
 WEATHER_ENABLED = os.getenv("WEATHER_ENABLED", "true").lower() == "true"
@@ -334,8 +340,8 @@ MENU_LINES = [("breakfast", "🍳", "Breakfast"), ("lunch", "🍛", "Lunch"), ("
 TASKS = {
     "morning": ("the morning hello. Open by introducing yourself casually, like 'AMEXA here' plus a good morning "
                 "to the team, then a few words to start the day. ONE short sentence, max 15 words. "
-                "Never name any food or drink. "
-                "Don't list the menu; it's added below your message automatically."),
+                "Never name any food or drink and never mention the menu. "
+                "Question buttons (breakfast/lunch/tea/juice) are added below your message automatically."),
     "friday": ("the Friday 4:30 PM nudge: remind the team, in a funny way, not to rush home yet. It's still "
                "work time, finish strong, close the laptop properly, push the commit, don't sprint to the "
                "parking lot. ONE very short sentence, max 10 words, playful, never preachy. "
@@ -389,16 +395,79 @@ def menu_block():
     return "\n".join([f"🍽️ *Today's menu*"] + lines) if lines else None
 
 
+# Morning question buttons. The morning message never reveals the menu; people tap to ask.
+QUESTIONS = {
+    "breakfast": ["🍳 What's for breakfast?", "🍳 Breakfast today?", "🍳 Anything for breakfast?"],
+    "lunch": ["🍛 What's for lunch?", "🍛 Lunch menu?", "🍛 What are we eating at lunch?"],
+    "tea": ["☕ What's with tea?", "☕ Tea snack today?", "☕ Anything with tea?"],
+    "juice": ["🧃 Any juice today?", "🧃 Juice today?", "🧃 Which juice today?"],
+}
+ANSWER_LABELS = {"breakfast": ("🍳", "Breakfast"), "lunch": ("🍛", "Lunch"), "tea": ("☕", "Tea"), "juice": ("🧃", "Juice")}
+NUM_QUESTIONS = 3
+
+
+def pick_questions(n: int = NUM_QUESTIONS) -> list:
+    """Random (kind, question text) pairs for the morning buttons."""
+    kinds = random.sample(list(QUESTIONS), min(n, len(QUESTIONS)))
+    return [(k, random.choice(QUESTIONS[k])) for k in kinds]
+
+
+def answer_question(kind: str) -> str:
+    """Answer a morning-button question straight from the sheet (item verbatim)."""
+    if kind not in ANSWER_LABELS:
+        raise ValueError(f"unknown question: {kind}")
+    icon, label = ANSWER_LABELS[kind]
+    item = get_today_menu(kind)
+    if item:
+        return f"{icon} *{label} today:* {item}"
+    if kind == "juice":
+        return "🧃 No juice on the sheet today, machanla."
+    return f"{icon} {label} isn't on the sheet yet. Check back a bit later."
+
+
+_last_asked = {}
+
+
+def ask(kind: str) -> str:
+    """Handle a button tap: return the answer and (rate-limited) post it to the group."""
+    text = answer_question(kind)
+    now = time.time()
+    if ASK_POST_TO_GROUP and WEBHOOK_URL and now - _last_asked.get(kind, 0) >= ASK_COOLDOWN_SECONDS:
+        _last_asked[kind] = now
+        try:
+            _post(WEBHOOK_URL, text)
+        except Exception:
+            log.exception("Could not post answer for %s", kind)
+    return text
+
+
+def morning_payload() -> dict:
+    """Morning hello (no menu) plus random question buttons that call this bot's /ask endpoint."""
+    text = persona.sign(compose("morning"))
+    questions = pick_questions()
+    if not BOT_PUBLIC_URL:
+        return {"text": clean(text + "\n\n" + "\n".join(q for _, q in questions))}
+    buttons = [{"text": q, "onClick": {"openLink": {"url": f"{BOT_PUBLIC_URL}/ask?q={k}"}}} for k, q in questions]
+    return {"text": clean(text), "cardsV2": [{"cardId": "morning-questions", "card": {"sections": [
+        {"widgets": [{"buttonList": {"buttons": buttons}}]}]}}]}
+
+
 def morning_text() -> str:
-    menu = menu_block()
-    text = compose("morning")
-    return persona.sign(f"{text}\n\n{menu}" if menu else text)
+    """Plain-text form of the morning message (used for previews/logs)."""
+    return morning_payload()["text"]
+
+
+def post_morning() -> str:
+    resp = requests.post(WEBHOOK_URL, json=morning_payload(),
+                         headers={"Content-Type": "application/json; charset=UTF-8"}, timeout=15)
+    resp.raise_for_status()
+    return f"Posted (HTTP {resp.status_code})"
 
 
 def scheduled_morning() -> None:
     if _is_weekend():
         return
-    log.info("Morning message: %s", _post(WEBHOOK_URL, morning_text()))
+    log.info("Morning message: %s", post_morning())
 
 
 def juice_text():
@@ -586,7 +655,7 @@ if __name__ == "__main__":
     if not WEBHOOK_URL:
         raise SystemExit("GOOGLE_CHAT_WEBHOOK_URL is not set")
     if args.now == "morning":
-        log.info(_post(WEBHOOK_URL, morning_text()))
+        log.info(post_morning())
     elif args.now == "juice":
         text = juice_text()
         log.info(_post(WEBHOOK_URL, text) if text else "No juice in the sheet for today; nothing sent")
