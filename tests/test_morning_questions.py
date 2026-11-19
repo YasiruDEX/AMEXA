@@ -17,7 +17,7 @@ class MorningQuestionTests(unittest.TestCase):
     def test_answers_use_sheet_verbatim(self):
         with patch.object(agent, 'get_today_menu', lambda k: 'Mango juice' if k == 'juice' else None):
             self.assertIn('Mango juice', agent.answer_question('juice'))
-            self.assertIn('not on the sheet', agent.answer_question('lunch'))
+            self.assertIn("isn't on the sheet", agent.answer_question('lunch'))
 
 
 if __name__ == '__main__':
