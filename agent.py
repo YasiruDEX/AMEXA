@@ -7,7 +7,7 @@ import os
 import random
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import requests
@@ -62,7 +62,7 @@ BOT_PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "").rstrip("/")
 # Post the button's answer into the group too (each question at most once per ASK_COOLDOWN_SECONDS).
 ASK_POST_TO_GROUP = os.getenv("ASK_POST_TO_GROUP", "true").lower() == "true"
 ASK_COOLDOWN_SECONDS = int(os.getenv("ASK_COOLDOWN_SECONDS", "600"))
-# Chance (0 to 1) that lunch/tea/juice/Friday messages carry surprise question buttons.
+# Chance (0 to 1) that juice/lunch messages carry surprise question buttons.
 # The morning message always has them.
 QUESTION_CHANCE = max(0.0, min(1.0, float(os.getenv("QUESTION_CHANCE", "0.5"))))
 
@@ -147,22 +147,14 @@ def _menu_rows():
     return None
 
 
-def next_workday(today=None):
-    """The next day that isn't Saturday/Sunday."""
-    day = (today or datetime.now(ZoneInfo(TIMEZONE)).date()) + timedelta(days=1)
-    while day.weekday() >= 5:
-        day += timedelta(days=1)
-    return day
-
-
-def get_today_menu(kind: str, day=None):
-    """Return the item for a column (breakfast/lunch/tea/juice) on `day` (default today), or None."""
+def get_today_menu(kind: str):
+    """Return today's item for a column (breakfast/lunch/tea/juice), or None if unset/unavailable."""
     if not MENU_SHEET_URL:
         return None
     rows = _menu_rows()
     if not rows:
         return None
-    today = day or datetime.now(ZoneInfo(TIMEZONE)).date()
+    today = datetime.now(ZoneInfo(TIMEZONE)).date()
     for row in rows:
         if _parse_date(row.get("date", "")) == today:
             return row.get(kind) or None
@@ -413,69 +405,54 @@ def menu_block():
     return "\n".join([f"🍽️ *Today's menu*"] + lines) if lines else None
 
 
-# Question buttons. Each tap opens {BOT_PUBLIC_URL}/ask?q=<kind>[&day=next] and the bot answers from the sheet.
+# Question buttons. Each tap opens {BOT_PUBLIC_URL}/ask?q=<kind> and the bot answers from the sheet.
 QUESTIONS = {
     "breakfast": ["🍳 What's for breakfast?", "🍳 Breakfast today?", "🍳 Anything for breakfast?"],
     "lunch": ["🍛 What's for lunch?", "🍛 Lunch menu?", "🍛 What are we eating at lunch?"],
     "tea": ["☕ What's with tea?", "☕ Tea snack today?", "☕ Anything with tea?"],
     "juice": ["🧃 Any juice today?", "🧃 Juice today?", "🧃 Which juice today?"],
 }
-NEXT_QUESTIONS = {
-    "breakfast": ["🍳 Breakfast {day}?", "🍳 What's for breakfast {day}?"],
-    "lunch": ["🍛 Lunch {day}?", "🍛 What's for lunch {day}?", "🍛 Spoilers for {day}'s lunch?"],
-    "tea": ["☕ Tea snack {day}?", "☕ What's with tea {day}?"],
-    "juice": ["🧃 Juice {day}?", "🧃 Any juice {day}?"],
-}
 ANSWER_LABELS = {"breakfast": ("🍳", "Breakfast"), "lunch": ("🍛", "Lunch"), "tea": ("☕", "Tea"), "juice": ("🧃", "Juice")}
-# Meals still ahead after each message, so a lunch message never asks about breakfast.
+# Today's meals still ahead after each message (the sheet only has today's menu), so a lunch
+# message never asks about breakfast. Tea and Friday messages have nothing left to ask about.
 UPCOMING = {
-    "morning": (["breakfast", "juice", "lunch", "tea"], []),
-    "juice": (["lunch", "tea"], []),
-    "lunch": (["tea"], ["breakfast", "lunch"]),
-    "tea": ([], ["breakfast", "lunch", "juice"]),
-    "friday": ([], ["breakfast", "lunch"]),
+    "morning": ["breakfast", "juice", "lunch", "tea"],
+    "juice": ["lunch", "tea"],
+    "lunch": ["tea"],
+    "tea": [],
+    "friday": [],
 }
 NUM_QUESTIONS = 3
 
 
-def _day_word() -> str:
-    day = next_workday()
-    return "tomorrow" if day == datetime.now(ZoneInfo(TIMEZONE)).date() + timedelta(days=1) else day.strftime("%A")
-
-
 def pick_questions(after: str = "morning", n: int = NUM_QUESTIONS) -> list:
-    """Random (kind, day, label) questions about meals still ahead of the `after` message."""
-    today, nxt = UPCOMING[after]
-    pool = [(k, "", random.choice(QUESTIONS[k])) for k in today]
-    word = _day_word()
-    pool += [(k, "next", random.choice(NEXT_QUESTIONS[k]).format(day=word)) for k in nxt]
-    return random.sample(pool, min(n, len(pool)))
+    """Random (kind, label) questions about today's meals still ahead of the `after` message."""
+    kinds = random.sample(UPCOMING[after], min(n, len(UPCOMING[after])))
+    return [(k, random.choice(QUESTIONS[k])) for k in kinds]
 
 
-def answer_question(kind: str, day: str = "") -> str:
-    """Answer a question button straight from the sheet (item verbatim)."""
+def answer_question(kind: str) -> str:
+    """Answer a question button straight from today's row of the sheet (item verbatim)."""
     if kind not in ANSWER_LABELS:
         raise ValueError(f"unknown question: {kind}")
     icon, label = ANSWER_LABELS[kind]
-    when = _day_word() if day == "next" else "today"
-    item = get_today_menu(kind, next_workday() if day == "next" else None)
+    item = get_today_menu(kind)
     if item:
-        return f"{icon} *{label} {when}:* {item}"
+        return f"{icon} *{label} today:* {item}"
     if kind == "juice":
-        return f"🧃 No juice on the sheet {when}, machanla."
-    return f"{icon} {label} {when} isn't on the sheet yet. Check back a bit later."
+        return "🧃 No juice on the sheet today, machanla."
+    return f"{icon} {label} isn't on the sheet yet. Check back a bit later."
 
 
 _last_asked = {}
 
 
-def ask(kind: str, day: str = "") -> str:
+def ask(kind: str) -> str:
     """Handle a button tap: return the answer and (rate-limited) post it to the group."""
-    text = answer_question(kind, day)
+    text = answer_question(kind)
     now = time.time()
-    key = (kind, day)
-    if ASK_POST_TO_GROUP and WEBHOOK_URL and now - _last_asked.get(key, 0) >= ASK_COOLDOWN_SECONDS:
-        _last_asked[key] = now
+    if ASK_POST_TO_GROUP and WEBHOOK_URL and now - _last_asked.get(kind, 0) >= ASK_COOLDOWN_SECONDS:
+        _last_asked[kind] = now
         try:
             _post(WEBHOOK_URL, text)
         except Exception:
@@ -494,12 +471,12 @@ def build_message(text: str, menu=None, gif_url=None, questions=None) -> dict:
         sections.append({"widgets": [{"image": {"imageUrl": gif_url, "altText": "GIF"}}]})
     if questions:
         if BOT_PUBLIC_URL:
-            buttons = [{"text": q, "onClick": {"openLink": {"url": f"{BOT_PUBLIC_URL}/ask?q={k}" + (f"&day={d}" if d else "")}}}
-                       for k, d, q in questions]
+            buttons = [{"text": q, "onClick": {"openLink": {"url": f"{BOT_PUBLIC_URL}/ask?q={k}"}}}
+                       for k, q in questions]
             sections.append({"header": f"Ask {persona.BOT_NAME}", "collapsible": False,
                              "widgets": [{"buttonList": {"buttons": buttons}}]})
         else:
-            payload["text"] += "\n\n" + "\n".join(q for _, _, q in questions)
+            payload["text"] += "\n\n" + "\n".join(q for _, q in questions)
     if sections:
         payload["cardsV2"] = [{"cardId": "amexa", "card": {"sections": sections}}]
     return payload
@@ -507,7 +484,7 @@ def build_message(text: str, menu=None, gif_url=None, questions=None) -> dict:
 
 def maybe_questions(after: str) -> list:
     """Surprise questions for non-morning messages, with QUESTION_CHANCE probability (1 or 2 of them)."""
-    if random.random() >= QUESTION_CHANCE:
+    if not UPCOMING[after] or random.random() >= QUESTION_CHANCE:
         return []
     return pick_questions(after, random.choice([1, 2]))
 

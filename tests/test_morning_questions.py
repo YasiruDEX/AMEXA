@@ -13,7 +13,7 @@ def buttons(payload):
 
 class QuestionTests(unittest.TestCase):
     def test_morning_has_no_menu_and_always_has_buttons(self):
-        with patch.object(agent, 'get_today_menu', lambda k, d=None: 'Rice & curry'), \
+        with patch.object(agent, 'get_today_menu', lambda k: 'Rice & curry'), \
              patch.object(agent, 'compose', lambda k: 'Good morning'), \
              patch.object(agent, 'QUESTION_CHANCE', 0), \
              patch.object(agent, 'BOT_PUBLIC_URL', 'https://bot.test'):
@@ -25,10 +25,10 @@ class QuestionTests(unittest.TestCase):
 
     def test_only_future_meals_are_asked(self):
         for _ in range(50):
-            for kind, day, _label in agent.pick_questions('lunch'):
-                self.assertTrue((kind == 'tea' and day == '') or day == 'next')
-            for kind, day, _label in agent.pick_questions('tea'):
-                self.assertEqual(day, 'next')
+            self.assertTrue(all(k == 'tea' for k, _ in agent.pick_questions('lunch')))
+            self.assertTrue(set(k for k, _ in agent.pick_questions('juice')) <= {'lunch', 'tea'})
+        with patch.object(agent, 'QUESTION_CHANCE', 1):
+            self.assertEqual(agent.maybe_questions('tea'), [])
 
     def test_question_chance_zero_means_no_buttons(self):
         with patch.object(agent, 'QUESTION_CHANCE', 0), patch.object(agent, 'BOT_PUBLIC_URL', 'https://bot.test'):
@@ -37,7 +37,7 @@ class QuestionTests(unittest.TestCase):
             self.assertTrue(buttons(agent.break_payload('Lunch.', 'lunch', 'Rice')))
 
     def test_answers_use_sheet_verbatim(self):
-        with patch.object(agent, 'get_today_menu', lambda k, d=None: 'Mango juice' if k == 'juice' else None):
+        with patch.object(agent, 'get_today_menu', lambda k: 'Mango juice' if k == 'juice' else None):
             self.assertIn('Mango juice', agent.answer_question('juice'))
             self.assertIn("isn't on the sheet", agent.answer_question('lunch'))
 

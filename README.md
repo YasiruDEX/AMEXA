@@ -51,7 +51,7 @@ Set `BOT_PUBLIC_URL` to where the bot is reachable (Google Chat webhooks can onl
 
 ### Surprise questions on other messages
 
-Lunch, tea, juice and Friday messages add 1 or 2 question buttons with probability `QUESTION_CHANCE` (default `0.5`). They only ask about meals still ahead: the juice message asks about lunch and tea, the lunch message about tea or the next working day's breakfast and lunch, and tea and Friday messages about the next working day (`/ask?q=lunch&day=next`). Menu items sit in a small card under the message, copied exactly from the sheet.
+Juice and lunch messages add 1 or 2 question buttons with probability `QUESTION_CHANCE` (default `0.5`). They only ask about today's meals still ahead (the sheet has only today's menu): the juice message asks about lunch and tea, the lunch message about tea. Tea and Friday messages come after the last meal, so they never get questions. Menu items sit in a small card under the message, copied exactly from the sheet.
 
 ## Daily menu sheet
 
