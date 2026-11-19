@@ -49,6 +49,10 @@ The morning message no longer lists the menu. It carries 3 random buttons picked
 
 Set `BOT_PUBLIC_URL` to where the bot is reachable (Google Chat webhooks can only attach link buttons, so the URL must be reachable from people's browsers). Without it, the questions appear as plain text.
 
+### Surprise questions on other messages
+
+Lunch, tea, juice and Friday messages add 1 or 2 question buttons with probability `QUESTION_CHANCE` (default `0.5`). They only ask about meals still ahead: the juice message asks about lunch and tea, the lunch message about tea or the next working day's breakfast and lunch, and tea and Friday messages about the next working day (`/ask?q=lunch&day=next`). Menu items sit in a small card under the message, copied exactly from the sheet.
+
 ## Daily menu sheet
 
 Google Sheet with the columns **`date | day | lunch | tea`** (dates as `YYYY-MM-DD`; `day` is optional and ignored). Fill in each day's row in the morning, or the whole week at once. Share the sheet as **"Anyone with the link can view"** and set `MENU_SHEET_URL` to its normal share link.
@@ -70,6 +74,7 @@ Google Sheet with the columns **`date | day | lunch | tea`** (dates as `YYYY-MM-
 | `TEA_TIMES` | `15:30` | |
 | `BOT_PUBLIC_URL` | — | Public base URL of the bot, used by the morning buttons |
 | `ASK_POST_TO_GROUP` | `true` | Post button answers into the group too |
+| `QUESTION_CHANCE` | `0.5` | Chance that non-morning messages carry surprise question buttons |
 | `ASK_COOLDOWN_SECONDS` | `600` | Min seconds between group posts for the same question |
 | `MORNING_TIMES` | `09:30` | Morning hello + question buttons; `off` disables it (old name `MENU_PREVIEW_TIMES` also works) |
 | `TIMEZONE` | `Asia/Colombo` | |

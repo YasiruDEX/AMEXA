@@ -41,7 +41,7 @@ class PersonalityTests(unittest.TestCase):
             self.assertIsNone(agent.pick_gif('lunch'))
 
     def test_failed_send_never_retried_or_remembered(self):
-        with patch.object(agent, 'OPENAI_API_KEY', 'test'), patch.object(agent, 'ALLOW_STATIC_FALLBACK', True), patch.object(agent, 'get_today_menu', return_value='Rice'), patch.object(agent, 'weather_now', return_value=None), patch.object(agent, 'draft_break', return_value=('Lunch time.', 'plain')), patch.object(agent, 'pick_gif', return_value=None), patch.object(agent, 'post_to_google_chat', side_effect=TimeoutError) as send:
+        with patch.object(agent, 'OPENAI_API_KEY', 'test'), patch.object(agent, 'ALLOW_STATIC_FALLBACK', True), patch.object(agent, 'get_today_menu', return_value='Rice'), patch.object(agent, 'weather_now', return_value=None), patch.object(agent, 'draft_break', return_value=('Lunch time.', 'plain')), patch.object(agent, 'pick_gif', return_value=None), patch.object(agent, 'send_payload', side_effect=TimeoutError) as send:
             with self.assertRaises(TimeoutError):
                 agent.run_break('lunch')
             send.assert_called_once()

@@ -151,11 +151,13 @@ def chat(req: ChatRequest) -> ChatResponse:
 
 
 @app.get("/ask", response_class=HTMLResponse)
-def ask(q: str) -> HTMLResponse:
+def ask(q: str, day: str = "") -> HTMLResponse:
     """Morning-button target: answers 'what's for breakfast/lunch/tea, any juice?' from the sheet."""
     if q not in agent.ANSWER_LABELS:
         raise HTTPException(status_code=400, detail="q must be breakfast, lunch, tea or juice")
-    answer = agent.ask(q).replace("*", "")
+    if day not in ("", "next"):
+        raise HTTPException(status_code=400, detail="day must be empty or 'next'")
+    answer = agent.ask(q, day).replace("*", "")
     note = "Posted in the group too." if agent.ASK_POST_TO_GROUP else ""
     return HTMLResponse(
         "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"

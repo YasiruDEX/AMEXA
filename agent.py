@@ -7,7 +7,7 @@ import os
 import random
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -62,6 +62,9 @@ BOT_PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "").rstrip("/")
 # Post the button's answer into the group too (each question at most once per ASK_COOLDOWN_SECONDS).
 ASK_POST_TO_GROUP = os.getenv("ASK_POST_TO_GROUP", "true").lower() == "true"
 ASK_COOLDOWN_SECONDS = int(os.getenv("ASK_COOLDOWN_SECONDS", "600"))
+# Chance (0 to 1) that lunch/tea/juice/Friday messages carry surprise question buttons.
+# The morning message always has them.
+QUESTION_CHANCE = max(0.0, min(1.0, float(os.getenv("QUESTION_CHANCE", "0.5"))))
 
 # Weather check for the commute reminder (Open-Meteo, free, no key). Defaults to Colombo.
 WEATHER_ENABLED = os.getenv("WEATHER_ENABLED", "true").lower() == "true"
@@ -144,14 +147,22 @@ def _menu_rows():
     return None
 
 
-def get_today_menu(kind: str):
-    """Return today's item for a column (breakfast/lunch/tea), or None if unset/unavailable."""
+def next_workday(today=None):
+    """The next day that isn't Saturday/Sunday."""
+    day = (today or datetime.now(ZoneInfo(TIMEZONE)).date()) + timedelta(days=1)
+    while day.weekday() >= 5:
+        day += timedelta(days=1)
+    return day
+
+
+def get_today_menu(kind: str, day=None):
+    """Return the item for a column (breakfast/lunch/tea/juice) on `day` (default today), or None."""
     if not MENU_SHEET_URL:
         return None
     rows = _menu_rows()
     if not rows:
         return None
-    today = datetime.now(ZoneInfo(TIMEZONE)).date()
+    today = day or datetime.now(ZoneInfo(TIMEZONE)).date()
     for row in rows:
         if _parse_date(row.get("date", "")) == today:
             return row.get(kind) or None
@@ -193,6 +204,13 @@ def with_menu(text: str, kind: str, item) -> str:
         icon = "🍽️" if kind == "lunch" else "☕"
         text = f"{text}\n\n{icon} *Today's {kind}:* {item}"
     return persona.sign(text)
+
+
+def break_payload(message: str, kind: str, item, gif_url=None) -> dict:
+    """Lunch/tea layout: the line, today's item verbatim in a card, optional GIF and surprise questions."""
+    icon = "🍛" if kind == "lunch" else "☕"
+    menu = [(icon, f"Today's {kind}", item)] if item else None
+    return build_message(persona.sign(message), menu, gif_url, maybe_questions(kind))
 
 
 def clean(text: str) -> str:
@@ -297,7 +315,7 @@ def generate_with_agent(kind: str) -> None:
     item = get_today_menu(kind)
     message, style = draft_break(kind, datetime.now(ZoneInfo(TIMEZONE)), item, weather_now())
     gif = pick_gif(kind)
-    result = post_to_google_chat(with_menu(message, kind, item), gif)
+    result = send_payload(break_payload(message, kind, item, gif))
     persona.remember(kind, message, style=style, gif_url=gif)
     log.info("%s message: %s", kind, result)
 
@@ -311,7 +329,7 @@ def run_break(kind: str) -> None:
         raise RuntimeError(f"Could not generate {kind} message (set OPENAI_API_KEY)")
     text = random.choice(FALLBACKS[kind]).format(team=TEAM_NAME)
     gif = pick_gif(kind)
-    log.info(post_to_google_chat(with_menu(text, kind, get_today_menu(kind)), gif))
+    log.info(send_payload(break_payload(text, kind, get_today_menu(kind), gif)))
     persona.remember(kind, text, style="fallback", gif_url=gif)
 
 
@@ -395,45 +413,69 @@ def menu_block():
     return "\n".join([f"🍽️ *Today's menu*"] + lines) if lines else None
 
 
-# Morning question buttons. The morning message never reveals the menu; people tap to ask.
+# Question buttons. Each tap opens {BOT_PUBLIC_URL}/ask?q=<kind>[&day=next] and the bot answers from the sheet.
 QUESTIONS = {
     "breakfast": ["🍳 What's for breakfast?", "🍳 Breakfast today?", "🍳 Anything for breakfast?"],
     "lunch": ["🍛 What's for lunch?", "🍛 Lunch menu?", "🍛 What are we eating at lunch?"],
     "tea": ["☕ What's with tea?", "☕ Tea snack today?", "☕ Anything with tea?"],
     "juice": ["🧃 Any juice today?", "🧃 Juice today?", "🧃 Which juice today?"],
 }
+NEXT_QUESTIONS = {
+    "breakfast": ["🍳 Breakfast {day}?", "🍳 What's for breakfast {day}?"],
+    "lunch": ["🍛 Lunch {day}?", "🍛 What's for lunch {day}?", "🍛 Spoilers for {day}'s lunch?"],
+    "tea": ["☕ Tea snack {day}?", "☕ What's with tea {day}?"],
+    "juice": ["🧃 Juice {day}?", "🧃 Any juice {day}?"],
+}
 ANSWER_LABELS = {"breakfast": ("🍳", "Breakfast"), "lunch": ("🍛", "Lunch"), "tea": ("☕", "Tea"), "juice": ("🧃", "Juice")}
+# Meals still ahead after each message, so a lunch message never asks about breakfast.
+UPCOMING = {
+    "morning": (["breakfast", "juice", "lunch", "tea"], []),
+    "juice": (["lunch", "tea"], []),
+    "lunch": (["tea"], ["breakfast", "lunch"]),
+    "tea": ([], ["breakfast", "lunch", "juice"]),
+    "friday": ([], ["breakfast", "lunch"]),
+}
 NUM_QUESTIONS = 3
 
 
-def pick_questions(n: int = NUM_QUESTIONS) -> list:
-    """Random (kind, question text) pairs for the morning buttons."""
-    kinds = random.sample(list(QUESTIONS), min(n, len(QUESTIONS)))
-    return [(k, random.choice(QUESTIONS[k])) for k in kinds]
+def _day_word() -> str:
+    day = next_workday()
+    return "tomorrow" if day == datetime.now(ZoneInfo(TIMEZONE)).date() + timedelta(days=1) else day.strftime("%A")
 
 
-def answer_question(kind: str) -> str:
-    """Answer a morning-button question straight from the sheet (item verbatim)."""
+def pick_questions(after: str = "morning", n: int = NUM_QUESTIONS) -> list:
+    """Random (kind, day, label) questions about meals still ahead of the `after` message."""
+    today, nxt = UPCOMING[after]
+    pool = [(k, "", random.choice(QUESTIONS[k])) for k in today]
+    word = _day_word()
+    pool += [(k, "next", random.choice(NEXT_QUESTIONS[k]).format(day=word)) for k in nxt]
+    return random.sample(pool, min(n, len(pool)))
+
+
+def answer_question(kind: str, day: str = "") -> str:
+    """Answer a question button straight from the sheet (item verbatim)."""
     if kind not in ANSWER_LABELS:
         raise ValueError(f"unknown question: {kind}")
     icon, label = ANSWER_LABELS[kind]
-    item = get_today_menu(kind)
+    when = _day_word() if day == "next" else "today"
+    item = get_today_menu(kind, next_workday() if day == "next" else None)
     if item:
-        return f"{icon} *{label} today:* {item}"
+        return f"{icon} *{label} {when}:* {item}"
     if kind == "juice":
-        return "🧃 No juice on the sheet today, machanla."
-    return f"{icon} {label} isn't on the sheet yet. Check back a bit later."
+        return f"🧃 No juice on the sheet {when}, machanla."
+    return f"{icon} {label} {when} isn't on the sheet yet. Check back a bit later."
 
 
 _last_asked = {}
 
 
-def ask(kind: str) -> str:
+def ask(kind: str, day: str = "") -> str:
     """Handle a button tap: return the answer and (rate-limited) post it to the group."""
-    text = answer_question(kind)
+    text = answer_question(kind, day)
     now = time.time()
-    if ASK_POST_TO_GROUP and WEBHOOK_URL and now - _last_asked.get(kind, 0) >= ASK_COOLDOWN_SECONDS:
-        _last_asked[kind] = now
+    key = (kind, day)
+    if ASK_POST_TO_GROUP and WEBHOOK_URL and now - _last_asked.get(key, 0) >= ASK_COOLDOWN_SECONDS:
+        _last_asked[key] = now
         try:
             _post(WEBHOOK_URL, text)
         except Exception:
@@ -441,15 +483,45 @@ def ask(kind: str) -> str:
     return text
 
 
+def build_message(text: str, menu=None, gif_url=None, questions=None) -> dict:
+    """One consistent layout: the chat line, then a card with the menu, an optional GIF and buttons."""
+    payload = {"text": clean(text)}
+    sections = []
+    if menu:
+        sections.append({"widgets": [{"decoratedText": {
+            "topLabel": label, "text": f"{icon}  <b>{item}</b>", "wrapText": True}} for icon, label, item in menu]})
+    if gif_url:
+        sections.append({"widgets": [{"image": {"imageUrl": gif_url, "altText": "GIF"}}]})
+    if questions:
+        if BOT_PUBLIC_URL:
+            buttons = [{"text": q, "onClick": {"openLink": {"url": f"{BOT_PUBLIC_URL}/ask?q={k}" + (f"&day={d}" if d else "")}}}
+                       for k, d, q in questions]
+            sections.append({"header": f"Ask {persona.BOT_NAME}", "collapsible": False,
+                             "widgets": [{"buttonList": {"buttons": buttons}}]})
+        else:
+            payload["text"] += "\n\n" + "\n".join(q for _, _, q in questions)
+    if sections:
+        payload["cardsV2"] = [{"cardId": "amexa", "card": {"sections": sections}}]
+    return payload
+
+
+def maybe_questions(after: str) -> list:
+    """Surprise questions for non-morning messages, with QUESTION_CHANCE probability (1 or 2 of them)."""
+    if random.random() >= QUESTION_CHANCE:
+        return []
+    return pick_questions(after, random.choice([1, 2]))
+
+
+def send_payload(payload: dict) -> str:
+    resp = requests.post(WEBHOOK_URL, json=payload,
+                         headers={"Content-Type": "application/json; charset=UTF-8"}, timeout=15)
+    resp.raise_for_status()
+    return f"Posted (HTTP {resp.status_code})"
+
+
 def morning_payload() -> dict:
-    """Morning hello (no menu) plus random question buttons that call this bot's /ask endpoint."""
-    text = persona.sign(compose("morning"))
-    questions = pick_questions()
-    if not BOT_PUBLIC_URL:
-        return {"text": clean(text + "\n\n" + "\n".join(q for _, q in questions))}
-    buttons = [{"text": q, "onClick": {"openLink": {"url": f"{BOT_PUBLIC_URL}/ask?q={k}"}}} for k, q in questions]
-    return {"text": clean(text), "cardsV2": [{"cardId": "morning-questions", "card": {"sections": [
-        {"widgets": [{"buttonList": {"buttons": buttons}}]}]}}]}
+    """Morning hello (no menu) plus random question buttons. Always has questions."""
+    return build_message(persona.sign(compose("morning")), questions=pick_questions("morning"))
 
 
 def morning_text() -> str:
@@ -458,10 +530,7 @@ def morning_text() -> str:
 
 
 def post_morning() -> str:
-    resp = requests.post(WEBHOOK_URL, json=morning_payload(),
-                         headers={"Content-Type": "application/json; charset=UTF-8"}, timeout=15)
-    resp.raise_for_status()
-    return f"Posted (HTTP {resp.status_code})"
+    return send_payload(morning_payload())
 
 
 def scheduled_morning() -> None:
@@ -470,29 +539,35 @@ def scheduled_morning() -> None:
     log.info("Morning message: %s", post_morning())
 
 
-def juice_text():
+def juice_payload():
     """Juice reminder with today's juice from the sheet, or None if no juice today."""
     item = get_today_menu("juice")
     if not item:
         return None
-    return persona.sign(f"{compose('juice', item)}\n\n🧃 *Today's juice:* {item}")
+    return build_message(persona.sign(compose("juice", item)), [("🧃", "Today's juice", item)],
+                         questions=maybe_questions("juice"))
+
+
+def friday_payload() -> dict:
+    return build_message(persona.sign(compose("friday")), questions=maybe_questions("friday"))
 
 
 def scheduled_juice() -> None:
     if _is_weekend():
         return
-    text = juice_text()
-    if not text:
+    payload = juice_payload()
+    if not payload:
         log.info("No juice in the sheet for today; skipping juice reminder")
         return
-    log.info("Juice message: %s", _post(WEBHOOK_URL, text))
+    log.info("Juice message: %s", send_payload(payload))
 
 
 def scheduled_simple(kind: str) -> None:
     """Friday wind-down / Monday juice: AI-written, signed, main group."""
     if _is_weekend():
         return
-    log.info("%s message: %s", kind, _post(WEBHOOK_URL, persona.sign(compose(kind))))
+    payload = friday_payload() if kind == "friday" else build_message(persona.sign(compose(kind)))
+    log.info("%s message: %s", kind, send_payload(payload))
 
 
 def weather_now():
@@ -657,10 +732,10 @@ if __name__ == "__main__":
     if args.now == "morning":
         log.info(post_morning())
     elif args.now == "juice":
-        text = juice_text()
-        log.info(_post(WEBHOOK_URL, text) if text else "No juice in the sheet for today; nothing sent")
+        payload = juice_payload()
+        log.info(send_payload(payload) if payload else "No juice in the sheet for today; nothing sent")
     elif args.now == "friday":
-        log.info(_post(WEBHOOK_URL, persona.sign(compose(args.now))))
+        log.info(send_payload(friday_payload()))
     elif args.now == "commute":
         if not COMMUTE_WEBHOOK_URL:
             raise SystemExit("COMMUTE_WEBHOOK_URL is not set")
