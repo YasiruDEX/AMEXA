@@ -25,10 +25,11 @@ class QuestionTests(unittest.TestCase):
 
     def test_only_future_meals_are_asked(self):
         for _ in range(50):
-            self.assertTrue(all(k == 'tea' for k, _ in agent.pick_questions('lunch')))
-            self.assertTrue(set(k for k, _ in agent.pick_questions('juice')) <= {'lunch', 'tea'})
-        with patch.object(agent, 'QUESTION_CHANCE', 1):
-            self.assertEqual(agent.maybe_questions('tea'), [])
+            for after, meals in (('lunch', {'tea'}), ('juice', {'lunch', 'tea'}), ('tea', set())):
+                qs = [k for k, _ in agent.pick_questions(after)]
+                self.assertEqual(sum(k.startswith('gh:') for k in qs), 1)
+                self.assertTrue({k for k in qs if not k.startswith('gh:')} <= meals)
+                self.assertTrue(all(agent.is_question(k) for k in qs))
 
     def test_question_chance_zero_means_no_buttons(self):
         with patch.object(agent, 'QUESTION_CHANCE', 0), patch.object(agent, 'BOT_PUBLIC_URL', 'https://bot.test'):

@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 import agent
 import persona
+import repo
 
 log = logging.getLogger("break-bot")
 _sessions: Dict[str, List[Any]] = {}
@@ -88,7 +89,17 @@ def chat_with_agent(message: str, session_id: str, context: Optional[Dict[str, A
         mention_all: true to @mention everyone (only if the user asks or it's urgent)."""
         return agent.post_announcement(message, title, important, mention_all)
 
-    tools = [get_schedule, get_today_menu, trigger_break_message, send_custom_message, send_announcement]
+    @tool
+    def agent_manager_repo(question: str) -> str:
+        """Read-only facts about the wso2/agent-manager GitHub repo. question must be one of:
+        top_committer, open_issues, open_prs, prs_merged, prs_opened, issues_closed, issues_opened,
+        commits_week, committers_week, last_commit, bugs, top_pr_author, top_merger, oldest_issue,
+        newest_issue, hottest_issue, oldest_pr, latest_pr, release, stars, top_contributor."""
+        if question not in repo.QUESTIONS:
+            return "Unknown question. Valid: " + ", ".join(repo.QUESTIONS)
+        return repo.answer(question)
+
+    tools = [agent_manager_repo, get_schedule, get_today_menu, trigger_break_message, send_custom_message, send_announcement]
     prompt = ChatPromptTemplate.from_messages([
         ("system",
          "{character}\n"
@@ -103,6 +114,8 @@ def chat_with_agent(message: str, session_id: str, context: Optional[Dict[str, A
          "Casual messages: send_custom_message.\n"
          "- Only post to the group when the user clearly asks. After posting, tell the user exactly what was sent.\n"
          "- Never use em dashes (—) or en dashes (–) in messages you post; use commas or full stops.\n"
+         "- For questions about the agent-manager GitHub repo (commits, issues, PRs, releases), call "
+         "agent_manager_repo and quote the numbers and names exactly.\n"
          "- When asked about the menu, call get_today_menu and quote the items exactly as returned; never shorten or rename dishes.\n"
          "Extra context: {context}"),
         ("placeholder", "{history}"),
@@ -153,15 +166,15 @@ def chat(req: ChatRequest) -> ChatResponse:
 @app.get("/ask", response_class=HTMLResponse)
 def ask(q: str) -> HTMLResponse:
     """Morning-button target: answers 'what's for breakfast/lunch/tea, any juice?' from the sheet."""
-    if q not in agent.ANSWER_LABELS:
-        raise HTTPException(status_code=400, detail="q must be breakfast, lunch, tea or juice")
+    if not agent.is_question(q):
+        raise HTTPException(status_code=400, detail="unknown question")
     answer = agent.ask(q).replace("*", "")
     note = "Posted in the group too." if agent.ASK_POST_TO_GROUP else ""
     return HTMLResponse(
         "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
         f"<title>{html.escape(persona.BOT_NAME)}</title>"
         "<body style='font-family:system-ui;display:grid;place-items:center;min-height:90vh;margin:0 16px'>"
-        f"<div style='text-align:center'><h2>{html.escape(answer)}</h2><p style='color:#666'>{note}</p></div>")
+        f"<div style='text-align:center'><h2 style='white-space:pre-line'>{html.escape(answer)}</h2><p style='color:#666'>{note}</p></div>")
 
 
 @app.get("/health")

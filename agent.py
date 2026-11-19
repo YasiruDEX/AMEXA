@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import persona  # noqa: E402  (reads env after load_dotenv)
+import repo  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("break-bot")
 
@@ -62,7 +63,7 @@ BOT_PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "").rstrip("/")
 # Post the button's answer into the group too (each question at most once per ASK_COOLDOWN_SECONDS).
 ASK_POST_TO_GROUP = os.getenv("ASK_POST_TO_GROUP", "true").lower() == "true"
 ASK_COOLDOWN_SECONDS = int(os.getenv("ASK_COOLDOWN_SECONDS", "600"))
-# Chance (0 to 1) that juice/lunch messages carry surprise question buttons.
+# Chance (0 to 1) that juice/lunch/tea/Friday messages carry surprise question buttons.
 # The morning message always has them.
 QUESTION_CHANCE = max(0.0, min(1.0, float(os.getenv("QUESTION_CHANCE", "0.5"))))
 
@@ -426,13 +427,23 @@ NUM_QUESTIONS = 3
 
 
 def pick_questions(after: str = "morning", n: int = NUM_QUESTIONS) -> list:
-    """Random (kind, label) questions about today's meals still ahead of the `after` message."""
-    kinds = random.sample(UPCOMING[after], min(n, len(UPCOMING[after])))
-    return [(k, random.choice(QUESTIONS[k])) for k in kinds]
+    """Random (q, label) buttons: meal questions about today's meals still ahead of the `after`
+    message, plus exactly one wso2/agent-manager repo question."""
+    kinds = random.sample(UPCOMING[after], min(n - 1, len(UPCOMING[after])))
+    key, label = repo.random_question()
+    picked = [(k, random.choice(QUESTIONS[k])) for k in kinds] + [(f"gh:{key}", label)]
+    random.shuffle(picked)
+    return picked
+
+
+def is_question(q: str) -> bool:
+    return q in ANSWER_LABELS or (q.startswith("gh:") and q[3:] in repo.QUESTIONS)
 
 
 def answer_question(kind: str) -> str:
-    """Answer a question button straight from today's row of the sheet (item verbatim)."""
+    """Answer a question button: repo questions from GitHub, meals from today's row of the sheet."""
+    if kind.startswith("gh:"):
+        return repo.answer(kind[3:])
     if kind not in ANSWER_LABELS:
         raise ValueError(f"unknown question: {kind}")
     icon, label = ANSWER_LABELS[kind]
@@ -484,7 +495,7 @@ def build_message(text: str, menu=None, gif_url=None, questions=None) -> dict:
 
 def maybe_questions(after: str) -> list:
     """Surprise questions for non-morning messages, with QUESTION_CHANCE probability (1 or 2 of them)."""
-    if not UPCOMING[after] or random.random() >= QUESTION_CHANCE:
+    if random.random() >= QUESTION_CHANCE:
         return []
     return pick_questions(after, random.choice([1, 2]))
 

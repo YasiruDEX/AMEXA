@@ -53,6 +53,12 @@ Set `BOT_PUBLIC_URL` to where the bot is reachable (Google Chat webhooks can onl
 
 Juice and lunch messages add 1 or 2 question buttons with probability `QUESTION_CHANCE` (default `0.5`). They only ask about today's meals still ahead (the sheet has only today's menu): the juice message asks about lunch and tea, the lunch message about tea. Tea and Friday messages come after the last meal, so they never get questions. Menu items sit in a small card under the message, copied exactly from the sheet.
 
+### Agent Manager repo questions
+
+Every set of question buttons includes exactly one random question about [wso2/agent-manager](https://github.com/wso2/agent-manager), from 21 options: best committer this week, open issues, open PRs, PRs merged this week, open bugs, oldest open issue, latest release and more (see `repo.py`). Answers come live from the GitHub API, cached for 5 minutes. Because of this, tea and Friday messages can also get a repo question. `/chat` can answer these questions too.
+
+Set `GITHUB_TOKEN` (a token with no scopes is enough) to raise GitHub's rate limit. It is optional.
+
 ## Daily menu sheet
 
 Google Sheet with the columns **`date | day | lunch | tea`** (dates as `YYYY-MM-DD`; `day` is optional and ignored). Fill in each day's row in the morning, or the whole week at once. Share the sheet as **"Anyone with the link can view"** and set `MENU_SHEET_URL` to its normal share link.
@@ -74,6 +80,7 @@ Google Sheet with the columns **`date | day | lunch | tea`** (dates as `YYYY-MM-
 | `TEA_TIMES` | `15:30` | |
 | `BOT_PUBLIC_URL` | — | Public base URL of the bot, used by the morning buttons |
 | `ASK_POST_TO_GROUP` | `true` | Post button answers into the group too |
+| `GITHUB_TOKEN` | — | Optional; raises the GitHub API rate limit for repo questions |
 | `QUESTION_CHANCE` | `0.5` | Chance that non-morning messages carry surprise question buttons |
 | `ASK_COOLDOWN_SECONDS` | `600` | Min seconds between group posts for the same question |
 | `MORNING_TIMES` | `09:30` | Morning hello + question buttons; `off` disables it (old name `MENU_PREVIEW_TIMES` also works) |
