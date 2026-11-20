@@ -1,4 +1,4 @@
-"""Chat Agent entrypoint: POST /chat on port 8000, plus the lunch/tea scheduler in the background."""
+"""AMEXA entrypoint: POST /chat on port 8000, plus the lunch/tea scheduler in the background."""
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import uvicorn
 import html
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -40,7 +41,9 @@ async def lifespan(app: FastAPI):
         sched.shutdown(wait=False)
 
 
-app = FastAPI(title="Break-time Agent", lifespan=lifespan)
+__version__ = (Path(__file__).with_name("VERSION").read_text().strip()
+               if Path(__file__).with_name("VERSION").exists() else "dev")
+app = FastAPI(title="AMEXA", version=__version__, lifespan=lifespan)
 
 
 def schedule_summary() -> str:
@@ -179,7 +182,7 @@ def ask(q: str) -> HTMLResponse:
 
 @app.get("/health")
 def health() -> Dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}
 
 
 if __name__ == "__main__":
