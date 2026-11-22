@@ -19,7 +19,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import persona  # noqa: E402  (reads env after load_dotenv)
-import repo  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("break-bot")
 
@@ -427,23 +426,17 @@ NUM_QUESTIONS = 3
 
 
 def pick_questions(after: str = "morning", n: int = NUM_QUESTIONS) -> list:
-    """Random (q, label) buttons: meal questions about today's meals still ahead of the `after`
-    message, plus exactly one wso2/agent-manager repo question."""
-    kinds = random.sample(UPCOMING[after], min(n - 1, len(UPCOMING[after])))
-    key, label = repo.random_question()
-    picked = [(k, random.choice(QUESTIONS[k])) for k in kinds] + [(f"gh:{key}", label)]
-    random.shuffle(picked)
-    return picked
+    """Random (q, label) buttons: meal questions about today's meals still ahead of the `after` message."""
+    kinds = random.sample(UPCOMING[after], min(n, len(UPCOMING[after])))
+    return [(k, random.choice(QUESTIONS[k])) for k in kinds]
 
 
 def is_question(q: str) -> bool:
-    return q in ANSWER_LABELS or (q.startswith("gh:") and q[3:] in repo.QUESTIONS)
+    return q in ANSWER_LABELS
 
 
 def answer_question(kind: str) -> str:
-    """Answer a question button: repo questions from GitHub, meals from today's row of the sheet."""
-    if kind.startswith("gh:"):
-        return repo.answer(kind[3:])
+    """Answer a question button from today's row of the menu sheet."""
     if kind not in ANSWER_LABELS:
         raise ValueError(f"unknown question: {kind}")
     icon, label = ANSWER_LABELS[kind]
@@ -682,9 +675,7 @@ def schedule(background: bool = False):
                           args=[kind], id=f"{kind}-{t}", misfire_grace_time=300)
             log.info("Scheduled %s at %02d:%02d (%s, %s)", kind, hour, minute, SCHEDULE_DAYS, TIMEZONE)
     for func, times, days, args, label in (
-            (scheduled_morning, MORNING_TIMES, "mon-fri", [], "morning message"),
-            (scheduled_simple, FRIDAY_WINDDOWN_TIMES, "fri", ["friday"], "Friday wind-down"),
-            (scheduled_juice, JUICE_TIMES, "mon-fri", [], "juice reminder")):
+            (scheduled_juice, JUICE_TIMES, "mon-fri", [], "juice reminder"),):
         for t in time_list(times):
             try:
                 hour, minute = parse_time(t)
@@ -694,40 +685,19 @@ def schedule(background: bool = False):
             sched.add_job(func, CronTrigger(day_of_week=days, hour=hour, minute=minute, timezone=TIMEZONE),
                           args=args, id=f"{label}-{t}", misfire_grace_time=300)
             log.info("Scheduled %s at %02d:%02d (%s, %s)", label, hour, minute, days, TIMEZONE)
-    if COMMUTE_WEBHOOK_URL:
-        for t in time_list(COMMUTE_TIMES):
-            try:
-                hour, minute = parse_time(t)
-            except ValueError as e:
-                log.error("Skipping commute schedule: %s", e)
-                continue
-            sched.add_job(scheduled_commute, CronTrigger(day_of_week="mon-fri", hour=hour,
-                                                         minute=minute, timezone=TIMEZONE),
-                          id=f"commute-{t}", misfire_grace_time=300)
-            log.info("Scheduled commute reminder at %02d:%02d (mon-fri, %s)", hour, minute, TIMEZONE)
-    else:
-        log.warning("COMMUTE_WEBHOOK_URL not set; commute reminder disabled")
     sched.start()
     return sched
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--now", choices=["lunch", "tea", "morning", "friday", "juice", "commute"], help="send one message immediately and exit")
+    parser.add_argument("--now", choices=["lunch", "tea", "juice"], help="send one message immediately and exit")
     args = parser.parse_args()
     if not WEBHOOK_URL:
         raise SystemExit("GOOGLE_CHAT_WEBHOOK_URL is not set")
-    if args.now == "morning":
-        log.info(post_morning())
-    elif args.now == "juice":
+    if args.now == "juice":
         payload = juice_payload()
         log.info(send_payload(payload) if payload else "No juice in the sheet for today; nothing sent")
-    elif args.now == "friday":
-        log.info(send_payload(friday_payload()))
-    elif args.now == "commute":
-        if not COMMUTE_WEBHOOK_URL:
-            raise SystemExit("COMMUTE_WEBHOOK_URL is not set")
-        send_commute()
     elif args.now:
         run_break(args.now)
     else:

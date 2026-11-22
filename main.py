@@ -14,7 +14,6 @@ from pydantic import BaseModel
 
 import agent
 import persona
-import repo
 
 log = logging.getLogger("break-bot")
 _sessions: Dict[str, List[Any]] = {}
@@ -78,47 +77,15 @@ def chat_with_agent(message: str, session_id: str, context: Optional[Dict[str, A
         agent.run_break(kind)
         return f"{kind} message posted"
 
-    @tool
-    def send_custom_message(message: str) -> str:
-        """Post a custom message (exact text) to the team's Google Chat space."""
-        return agent.post_to_google_chat(message)
-
-    @tool
-    def send_announcement(message: str, title: str = "Announcement", important: bool = False,
-                          mention_all: bool = False) -> str:
-        """Post an important announcement to the team as a highlighted card.
-        message: the body (Google Chat supports <b>bold</b>, <i>italic</i>, <br> in cards).
-        title: short headline. important: true for urgent/critical notices.
-        mention_all: true to @mention everyone (only if the user asks or it's urgent)."""
-        return agent.post_announcement(message, title, important, mention_all)
-
-    @tool
-    def agent_manager_repo(question: str) -> str:
-        """Read-only facts about the wso2/agent-manager GitHub repo. question must be one of:
-        top_committer, open_issues, open_prs, prs_merged, prs_opened, issues_closed, issues_opened,
-        commits_week, committers_week, last_commit, bugs, top_pr_author, top_merger, oldest_issue,
-        newest_issue, hottest_issue, oldest_pr, latest_pr, release, stars, top_contributor."""
-        if question not in repo.QUESTIONS:
-            return "Unknown question. Valid: " + ", ".join(repo.QUESTIONS)
-        return repo.answer(question)
-
-    tools = [agent_manager_repo, get_schedule, get_today_menu, trigger_break_message, send_custom_message, send_announcement]
+    tools = [get_schedule, get_today_menu, trigger_break_message]
     prompt = ChatPromptTemplate.from_messages([
         ("system",
          "{character}\n"
          "You are the break-time bot for the '{team}' Google Chat group. Chat with the user in character "
-         "(short, dry, helpful). Help the user: answer questions about the schedule, trigger "
-         "lunch/tea messages, or post custom messages and announcements to the group when asked.\n"
-         "- If the user gives exact text in quotes or says 'send exactly', post it verbatim.\n"
-         "- If they give a brief (e.g. 'tell everyone the standup moved to 3pm'), write a clear, concise "
-         "message for them: professional but friendly, at most 1 emoji, no hype. Messages posted to the group "
-         "on the user's behalf stay clear and mostly out of character; jokes are fine only in casual ones.\n"
-         "- Important/urgent notices, deadlines, outages, schedule changes: use send_announcement. "
-         "Casual messages: send_custom_message.\n"
-         "- Only post to the group when the user clearly asks. After posting, tell the user exactly what was sent.\n"
-         "- Never use em dashes (—) or en dashes (–) in messages you post; use commas or full stops.\n"
-         "- For questions about the agent-manager GitHub repo (commits, issues, PRs, releases), call "
-         "agent_manager_repo and quote the numbers and names exactly.\n"
+         "(short, dry, helpful). You only handle food: today's menu (breakfast, juice, lunch, tea), "
+         "the lunch/tea/juice schedule, and triggering lunch/tea messages when asked. Politely decline "
+         "anything else (no custom messages, announcements, GitHub or repo questions).\n"
+         "- Never use em dashes (—) or en dashes (–).\n"
          "- When asked about the menu, call get_today_menu and quote the items exactly as returned; never shorten or rename dishes.\n"
          "Extra context: {context}"),
         ("placeholder", "{history}"),
@@ -142,15 +109,8 @@ def chat_without_llm(message: str) -> str:
         if kind in text and any(w in text for w in ("send", "trigger", "post", "now")):
             agent.run_break(kind)
             return f"Posted a {kind} message to the group ✅"
-    for prefix, important in (("urgent:", True), ("announce:", False)):
-        if text.startswith(prefix):
-            agent.post_announcement(message[len(prefix):].strip(), important=important)
-            return "Posted the announcement to the group ✅"
-    if text.startswith("say "):
-        agent.post_to_google_chat(message[4:])
-        return "Posted your message to the group ✅"
     return ("OPENAI_API_KEY isn't set, so I'm in basic mode. Try 'send lunch now', "
-            "'send tea now', 'say <message>', 'announce: <message>' or 'urgent: <message>'. " + schedule_summary())
+            "or 'send tea now'. " + schedule_summary())
 
 
 @app.post("/chat", response_model=ChatResponse)
